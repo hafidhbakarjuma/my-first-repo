@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+# Listen on localhost (127.0.0.1) port 98.
+# This script prefers netcat (nc) but falls back to ncat, socat or python if nc is
+# not available. It will warn and exit if you are not running as root and attempt
+# to bind to a privileged port (<1024).
+
+HOST=127.0.0.1
+PORT=98
+
+# detect available tool
+NC_CMD=""
+if command -v nc >/dev/null 2>&1; then
+	NC_CMD="nc"
+elif command -v ncat >/dev/null 2>&1; then
+	NC_CMD="ncat"
+elif command -v socat >/dev/null 2>&1; then
+	NC_CMD="socat"
+elif command -v python3 >/dev/null 2>&1; then
+	NC_CMD="python3"
+elif command -v python >/dev/null 2>&1; then
+	NC_CMD="python"
+fi
+
+# If binding to a privileged port (<1024) ensure running as root. On Windows
+# environments this check may not behave the same; if you know your env allows
+# it, set SKIP_PRIVILEGE_CHECK=1 to bypass this check.
+if [ "$PORT" -lt 1024 ] && [ "${SKIP_PRIVILEGE_CHECK}" != "1" ]; then
+	if command -v id >/dev/null 2>&1; then
+		UID_VAL=$(id -u)
+	else
+		UID_VAL=1
+	fi
+	if [ "$UID_VAL" -ne 0 ]; then
+		echo "Error: binding to privileged port $PORT requires root privileges." >&2
+		echo "Run this script with sudo/administrator or set SKIP_PRIVILEGE_CHECK=1 to override (not recommended)." >&2
+		exit 1
+	fi
+fi
+
+case "$NC_CMD" in
+	nc|ncat)
+		# Try common nc syntaxes. Some nc versions accept: nc -l <host> <port>
+		# Others use: nc -l -p <port> -s <host>
+		if $NC_CMD -h 2>&1 | grep -qi "-p" >/dev/null 2>&1; then
+			# prefer simple form first
+			$NC_CMD -l "$HOST" "$PORT" || $NC_CMD -l -p "$PORT" -s "$HOST"
+		else
+			$NC_CMD -l "$HOST" "$PORT"
+		fi
+		;;
+	socat)
+		socat TCP-LISTEN:"$PORT",bind="$HOST",reuseaddr,fork -
+		;;
+	python3|python)
+		# small python listener (single connection)
+		"$NC_CMD" - <<PY
+import socket
+HOST = '${HOST}'
+PORT = ${PORT}
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+		s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		s.bind((HOST, PORT))
+		s.listen(1)
+		conn, addr = s.accept()
+		print('Connection from', addr)
+		conn.close()
+PY
+		;;
+	"")
+		echo "Error: no tool available to listen on TCP sockets. Install 'nc' (netcat), 'ncat', or 'socat', or ensure python is available." >&2
+		exit 1
+		;;
+esac
+
+exit 0

@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-nc -l 127.0.0.1 98
+nc -l 127.0.0.2 98
 
